@@ -26,22 +26,30 @@ Users can photograph an avocado, receive an AI-based ripeness prediction, estima
 
 ## 🏗️ System Architecture
 
-> *(Architecture diagram will be added here.)*
-
 <p align="center">
-<img src="docs/images/architecture.png" width="900">
+<img src="docs/images/architecture.png" alt="D-avocado system architecture" width="900">
 </p>
 
 ---
 
-## 📂 Project Repositories
+## 📂 Project Structure
 
-| Repository | Description |
-|------------|-------------|
-| **d-avocado** | Project documentation and overall architecture |
-| **davocado-frontend** | SwiftUI iOS application |
-| **davocado-backend** | Spring Boot REST API |
-| **d-avocado-ripeness-mlops** | AI inference server and MLOps pipeline |
+```text
+d-avocado/
+│
+├── docs/
+│   ├── PRD.md
+│   ├── Architecture.md
+│   ├── API.md
+│   ├── Deployment.md
+│   └── Database.md
+│
+├── davocado-frontend
+├── davocado-backend
+└── d-avocado-ripeness-mlops
+```
+
+The three service directories represent the planned code modules for the iOS app, backend API, and AI/MLOps service. They can later be managed as separate repositories, Git submodules, or copied source folders depending on the team's repository strategy.
 
 ---
 
@@ -115,8 +123,7 @@ docs/
 ├── Architecture.md
 ├── API.md
 ├── Deployment.md
-├── Database.md
-└── images/
+└── Database.md
 ```
 
 | Document | Description |
@@ -126,27 +133,6 @@ docs/
 | **API.md** | Backend API specification |
 | **Deployment.md** | Google Cloud deployment guide |
 | **Database.md** | Database schema and design |
-
----
-
-## 📁 Repository Structure
-
-```
-d-avocado
-│
-├── README.md
-├── docs/
-│   ├── PRD.md
-│   ├── Architecture.md
-│   ├── API.md
-│   ├── Deployment.md
-│   ├── Database.md
-│   └── images/
-│
-├── davocado-frontend/
-├── davocado-backend/
-└── d-avocado-ripeness-mlops/
-```
 
 ---
 
