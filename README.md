@@ -42,7 +42,8 @@ d-avocado/
 │   ├── Architecture.md
 │   ├── API.md
 │   ├── Deployment.md
-│   └── Database.md
+│   ├── Database.md
+│   └── AI.md
 │
 ├── davocado-frontend
 ├── davocado-backend
@@ -123,7 +124,8 @@ docs/
 ├── Architecture.md
 ├── API.md
 ├── Deployment.md
-└── Database.md
+├── Database.md
+└── AI.md
 ```
 
 | Document | Description |
@@ -133,6 +135,7 @@ docs/
 | **API.md** | Backend API specification |
 | **Deployment.md** | Google Cloud deployment guide |
 | **Database.md** | Database schema and design |
+| **AI.md** | AI model architecture and evaluation summary |
 
 ---
 
