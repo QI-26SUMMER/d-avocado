@@ -6,19 +6,15 @@
 
 ## 1. High-level Architecture
 
-<p align="center">
-<img src="images/architecture.png" alt="D-avocado system architecture" width="900">
-</p>
-
 D-avocado is built as a mobile-first system with three main runtime components:
 
-| Component | Runtime | Responsibility |
-| --- | --- | --- |
+| **Component** | **Runtime** | **Responsibility** |
+| ---------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | iOS App | Xcode / Swift / SwiftUI | Captures avocado photos, shows scan results, manages settings, history, and notifications |
 | Backend API | Spring Boot on Cloud Run | Handles authentication, user settings, scan records, image storage, notification scheduling, and calls to the AI service |
-| AI Service | Cloud Run inference service | Crops/preprocesses images, predicts ripeness stage, calculates D-day, and returns model metadata |
+| AI Service | Cloud Run inference service | Preprocesses images, calls the deployed Vertex AI AutoML model for ripeness classification, calculates D-day, and returns model metadata |
 
-Google Cloud Platform provides the managed infrastructure: Cloud Run for compute, Cloud Storage for images, Cloud SQL for PostgreSQL data, Artifact Registry for container images, and Cloud Build for CI/CD.
+Google Cloud Platform provides the managed infrastructure: Cloud Run for compute, Cloud Storage for images, Cloud SQL for PostgreSQL data, and Artifact Registry for container images.
 
 ---
 
@@ -54,11 +50,12 @@ The AI service owns all model-related work.
 
 - Receives an image plus `{ target_stage, temp_celsius? }`.
 - Performs preprocessing and avocado/background segmentation.
-- Runs ResNet-18 based ripeness classification.
+- Runs the deployed Vertex AI AutoML model for ripeness classification.
+- ResNet-18 was also developed and evaluated during the model development process.
 - Returns `predicted_stage`, `stage_probs`, `days_to_target`, `estimated_peak_date`, and `model_version`.
 - Produces a cropped image for storage and optional UI/debug use.
 
-The backend stores the AI response as scan output. It does not recalculate model predictions or D-day values.
+The current production inference uses Vertex AI AutoML.
 
 ---
 
@@ -66,64 +63,58 @@ The backend stores the AI response as scan output. It does not recalculate model
 
 ### 3.1 Scan Flow
 
-```text
-iOS App
-  │
-  │ POST /scans
-  │ image + source + optional temp_celsius
-  ▼
-Spring Boot API
-  │
-  ├─ Store original image in Cloud Storage
-  │
-  ├─ Read users.preferred_stage
-  │
-  ├─ Call AI Service on Cloud Run
-  │    image + target_stage + optional temp_celsius
-  │
-  ├─ Store cropped image in Cloud Storage
-  │
-  ├─ Insert scans + images rows in Cloud SQL
-  │
-  ├─ Schedule notification if enabled
-  │
-  ▼
+iOS App  
+  │  
+  │ POST /scans  
+  │ image + source + optional temp_celsius  
+  ▼  
+Spring Boot API  
+  │  
+  ├─ Store original image in Cloud Storage  
+  │  
+  ├─ Read users.preferred_stage  
+  │  
+  ├─ Call AI Service on Cloud Run  
+  │    image + target_stage + optional temp_celsius  
+  │  
+  ├─ Store cropped image in Cloud Storage  
+  │  
+  ├─ Insert scans + images rows in Cloud SQL  
+  │  
+  ├─ Schedule notification if enabled  
+  │  
+  ▼  
 iOS App receives result card response
-```
 
 ### 3.2 History Flow
 
-```text
-iOS App
-  │
-  ├─ GET /scans
-  ├─ GET /scans/stats
-  └─ GET /scans/{id}
-       │
-       ▼
-Spring Boot API
-  │
-  ├─ Read scans, images, notifications from Cloud SQL
-  ├─ Generate signed URLs for private GCS image objects
+iOS App  
+  │  
+  ├─ GET /scans  
+  ├─ GET /scans/stats  
+  └─ GET /scans/{id}  
+       │  
+       ▼  
+Spring Boot API  
+  │  
+  ├─ Read scans, images, notifications from Cloud SQL  
+  ├─ Generate signed URLs for private GCS image objects  
   └─ Return display-ready scan records
-```
 
 ### 3.3 Notification Flow
 
-```text
-Scan created
-  │
-  ├─ estimated_peak_date returned by AI service
-  ├─ scheduled_at = estimated_peak_date - advance_notice_days
-  └─ notifications row inserted
-       │
-       ▼
-Scheduler
-  │
-  ├─ Finds due scheduled notifications
-  ├─ Sends push through FCM/APNs using users.push_token
+Scan created  
+  │  
+  ├─ estimated_peak_date returned by AI service  
+  ├─ scheduled_at = estimated_peak_date - advance_notice_days  
+  └─ notifications row inserted  
+       │  
+       ▼  
+Scheduler  
+  │  
+  ├─ Finds due scheduled notifications  
+  ├─ Sends push through FCM/APNs using users.push_token  
   └─ Marks notification as sent
-```
 
 ---
 
@@ -138,17 +129,15 @@ Cloud SQL for PostgreSQL stores normalized application data:
 - `images`
 - `notifications`
 
-See [Database.md](Database.md) for table definitions and DDL.
+See [Database.md](https://github.com/QI-26SUMMER/d-avocado/blob/main/docs/Database.md) for table definitions and DDL.
 
 ### 4.2 Cloud Storage
 
 Cloud Storage stores private image objects.
 
-```text
 gs://d-avocado-images/
 ├── raw/{user_id}/{scan_id}.jpg
 └── cropped/{user_id}/{scan_id}.jpg
-```
 
 - `raw/` stores the original uploaded image.
 - `cropped/` stores the AI-produced crop.
@@ -170,20 +159,11 @@ gs://d-avocado-images/
 
 ## 6. Main Design Decisions
 
-| Decision | Reason |
-| --- | --- |
+| **Decision** | **Reason** |
+| -------------------------------- | ----------------------------------------------------------------------------------------- |
 | One photo equals one scan | Simplifies the first build and removes per-fruit lifecycle complexity |
 | Global `preferred_stage` | Users set their target once, then scan without repeated setup |
 | Snapshot `target_stage` per scan | Historical D-day results stay stable even if the user changes settings later |
 | Room-temperature only | Refrigerated storage introduces chilling injury and invalidates the current D-day model |
 | AI service owns `days_to_target` | Keeps model and temperature logic in one place |
 | Private GCS bucket + signed URLs | Protects user images while still allowing mobile display |
-
----
-
-## 7. Open Architecture Questions
-
-- Whether `temp_celsius` becomes required after the iOS temperature input is added.
-- Whether push delivery uses FCM for iOS or direct APNs.
-- Whether image upload should remain Spring-mediated or move to direct signed URL upload.
-- Whether the notification scheduler runs inside the backend service, Cloud Scheduler, or a separate worker.
