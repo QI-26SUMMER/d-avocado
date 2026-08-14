@@ -222,7 +222,7 @@ Balancing improves aggregate AP, precision, recall, and Stage 3 AP compared with
 
 ## 7. Key Takeaways
 
-- ResNet-18 is the current custom deployment candidate because it has stronger control over training, validation, checkpoint selection, and future MLOps.
+- ResNet-18 provides stronger control over training, validation, checkpoint selection, and future MLOps.
 - AutoML Balanced performs slightly better than AutoML Raw on aggregate AP, precision, and recall.
 - ResNet-18 shows very high within-1-stage accuracy, which is important because ripeness stages are ordinal.
 - Exact accuracy remains the main operational target because QWK can look overly optimistic for near-miss predictions.
