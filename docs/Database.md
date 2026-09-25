@@ -2,8 +2,8 @@
 
 > Database design document for the avocado ripeness stage classification and optimal D-day prediction app.
 Target DBMS: **PostgreSQL**
-Version: **v1.0 implementation baseline** — aligned with the frontend, flat scan model finalized, ready for entity and migration implementation.
-Companion document: `D-avocado_API_Specification.md` (**v1.0**)
+Version: **v1.0 implementation baseline** — aligned with the frontend, flat scan model finalized. The implemented schema is generated from the JPA entities (see the note in §5).
+Companion document: [`API.md`](API.md) (**v1.0**)
 
 ---
 
@@ -11,7 +11,7 @@ Companion document: `D-avocado_API_Specification.md` (**v1.0**)
 
 1. **One scan equals one record.** The app does not register or track individual avocado entities. Taking a photo produces one result, and each result appears as an independent row in History. The core table is `scans`.
 2. **Room-temperature only.** There is no `storage_condition` distinction. Refrigerated storage is outside the app scope because ripening prediction is not meaningful under chilling conditions.
-3. **Temperature is optional, and the AI service owns D-day calculation.** Spring stores the user-entered temperature as-is. The AI service calculates remaining days using temperature; if the value is missing, the AI service uses a default. Spring has no beta coefficient or refitting logic. Remaining days may be decimal, such as `4.5`.
+3. **Temperature is optional, and the AI service owns D-day calculation.** Spring stores the user-entered temperature as-is. The AI service calculates remaining days using temperature; if the value is missing, the AI service uses a default. Spring has no ripening-coefficient or refitting logic; it only derives `estimated_peak_date` from `days_to_target`. Remaining days may be decimal, such as `4.5`.
 4. **Target stage is a global user setting.** Settings has a single target value: `users.preferred_stage`, from 1 to 5. Each scan snapshots the value into `scans.target_stage` so historical D-day interpretation does not change later.
 5. **Capture uses a single image.** One scan has one image.
 6. **Each scan has at most one notification.** The notification fires once, `advance_notice_days` days before the target date. It uses the Settings values `push_enabled` and `advance_notice_days`.
@@ -65,30 +65,30 @@ Stores email login data and the three Settings screen values: `preferred_stage`,
 
 ### 2.2 `scans` — Scan Records
 
-This is the app's main output table. **One photo creates one row.** The current state and prediction result live together in this table. Prediction fields are stored exactly as returned by the AI service.
+This is the app's main output table. **One photo creates one row.** The current state and prediction result live together in this table. Prediction fields are stored exactly as returned by the AI service, except `estimated_peak_date`, which Spring calculates.
 
 | Column | Type | Constraints | Description |
 | --- | --- | --- | --- |
 | `id` | BIGSERIAL | PK | Scan ID |
 | `user_id` | BIGINT | FK → users(id), NOT NULL | Owner |
 | `target_stage` | SMALLINT | NOT NULL, CHECK (1-5) | Target stage for this scan, snapshotted from `preferred_stage` |
-| `temp_celsius` | NUMERIC(4,1) | NULL | Room temperature entered by the user. NULL means the AI service used its default |
+| `temp_celsius` | NUMERIC(4,1) | NULL | Room temperature set by the user (the iOS app always sends it). NULL means the AI service used its default (20 °C) |
 | `predicted_stage` | SMALLINT | NOT NULL, CHECK (1-5) | Predicted stage from the model. Used for Result and History badges |
 | `confidence` | NUMERIC(5,4) | NULL | Confidence of the top predicted class, from 0 to 1 |
 | `stage_probs` | JSONB | NULL | Probability distribution for the five stages, `[p1..p5]` |
 | `days_to_target` | NUMERIC(4,1) | NULL | Remaining days until the target stage. Decimal and negative values are allowed; negative means overripe |
-| `estimated_peak_date` | DATE | NULL | Estimated target eating date and notification scheduling basis |
-| `model_version` | VARCHAR(50) | NOT NULL | Model version used for prediction, such as `resnet18_v3` |
+| `estimated_peak_date` | DATE | NULL | Estimated target eating date, calculated by Spring as today (UTC) + `round(days_to_target)`. Notification scheduling basis |
+| `model_version` | VARCHAR(50) | NOT NULL | Model version used for prediction, such as `automl:{project}:{endpoint_id}` or `P1_general_resnet18_paper_aug_oversample` |
 | `created_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() | Scan and prediction timestamp |
 
-- Index: `user_id`, `created_at DESC` for newest-first History queries.
+- Index: `user_id`, `created_at DESC`. (History queries currently order and page by `id DESC`.)
 
 #### Design Notes
 
 - **Append-only:** scan results are not modified after completion. "Re-scan" creates a new row rather than updating the old one. Mutable notification state lives in `notifications`.
 - **Target snapshot:** `users.preferred_stage` is copied into `scans.target_stage` at scan time. Later user setting changes do not alter historical D-day interpretation.
 - **Decimal `days_to_target`:** the AI service may return values such as `4.5`. UI labels such as `D-N` are derived from this value or from `estimated_peak_date`.
-- **Optional `temp_celsius`:** until the frontend temperature input is added, the value remains NULL. Once added, Spring stores the original input and lets the AI service interpret or clamp it.
+- **Optional `temp_celsius`:** the iOS app sends the room temperature set in Settings (10–25 °C slider). Spring stores the value as sent and lets the AI service interpret or clamp it.
 
 ---
 
@@ -100,16 +100,16 @@ Each scan has one image. The original and cropped images are stored in **GCS**, 
 | --- | --- | --- | --- |
 | `id` | BIGSERIAL | PK | Image ID |
 | `scan_id` | BIGINT | FK → scans(id), NOT NULL, UNIQUE | Parent scan, one-to-one |
-| `image_url` | VARCHAR(500) | NOT NULL | Original image path: `gs://d-avocado-images/raw/{user_id}/{scan_id}.jpg` |
-| `cropped_url` | VARCHAR(500) | NULL | Cropped and normalized image path: `gs://d-avocado-images/cropped/{user_id}/{scan_id}.jpg` |
+| `image_url` | VARCHAR(500) | NOT NULL | Original image path: `gs://qi-2026summer-avocado-images/raw/{user_id}/{scan_id}.jpg` |
+| `cropped_url` | VARCHAR(500) | NULL | Cropped and normalized image path: `gs://qi-2026summer-avocado-images/cropped/{user_id}/{scan_id}.jpg` |
 | `source` | VARCHAR(10) | NOT NULL, CHECK (`camera`/`gallery`) | Capture source |
-| `width` | INT | NULL | Original width in pixels |
-| `height` | INT | NULL | Original height in pixels |
+| `width` | INT | NULL | Original width in pixels (not populated yet) |
+| `height` | INT | NULL | Original height in pixels (not populated yet) |
 | `created_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() | Upload timestamp |
 
 - `scan_id` is unique because each scan has a single image.
 - The bucket is private, and clients receive TTL-signed URLs.
-- `cropped_url` is produced by the AI service. It starts as NULL after original upload, then is filled after inference succeeds. It is useful for debugging, re-evaluation, and UI messaging such as "this region was analyzed."
+- `cropped_url` is set when the AI service returns a cropped image. The `images` row is inserted once, after inference and upload. It is useful for debugging, re-evaluation, and UI messaging such as "this region was analyzed."
 
 ---
 
@@ -151,22 +151,23 @@ Each scan has at most one notification, scheduled once before the target date ac
 ## 4. D-day Calculation Flow
 
 1. The client uploads a photo.
-2. Spring stores the original image in GCS and creates an `images` row with `cropped_url=NULL`.
-3. Spring calls the AI service with the image, `target_stage` copied from `preferred_stage`, and `temp_celsius` when present.
+2. Spring calls the AI service with the image, `target_stage` copied from `preferred_stage`, and `temp_celsius` when present.
 
 ```json
-{ "target_stage": 3, "temp_celsius": 22.0 }
+{ "instances": [ { "b64": "<base64 image>" } ], "parameters": { "target_stage": 3, "temp_celsius": 22.0 } }
 ```
 
-4. Inside the AI service: crop image, run ResNet-18 inference, output `predicted_stage` and `stage_probs`, then calculate temperature-based `days_to_target`. If temperature is missing, the service uses a default. If the target stage is reached or passed, the value may be zero or negative.
-5. The AI service returns `{ predicted_stage, stage_probs, days_to_target, estimated_peak_date, model_version }` plus the cropped image.
-6. Spring stores the cropped image in GCS and updates `images.cropped_url`.
-7. Spring inserts the `scans` row with the snapshotted `target_stage` and AI results.
-8. If `push_enabled=true`, Spring schedules one `notifications` row for `estimated_peak_date - advance_notice_days`; the scheduler sends via FCM/APNs using `push_token`, then records `status='sent'` and `sent_at`.
+3. Inside the AI service: remove the background and crop the image, classify the stage (Vertex AI AutoML in production), output `predicted_stage` and `stage_probs`, then calculate temperature-based `days_to_target`. If temperature is missing, the service uses 20 °C. If the target stage is reached or passed, the value may be zero or negative.
+4. The AI service returns `{ predicted_stage, label, hint, confidence, stage_probs, model_version, days_to_target }` plus the cropped image (`cropped_b64`).
+5. Spring calculates `estimated_peak_date` as today (UTC) + `round(days_to_target)` and inserts the `scans` row with the snapshotted `target_stage` and AI results.
+6. Spring uploads the original and cropped images to GCS and inserts the `images` row.
+7. If `push_enabled=true`, Spring schedules one `notifications` row for `estimated_peak_date - advance_notice_days`; the scheduler sends via FCM/APNs using `push_token`, then records `status='sent'` and `sent_at`.
 
 ---
 
 ## 5. DDL (PostgreSQL Implementation Baseline)
+
+> **Implementation note.** The DDL below is the design baseline. The backend does not use a migration tool yet: the schema was generated by Hibernate from the JPA entities (`ddl-auto: update` locally, `none` in the cloud profile). As a result, the CHECK constraints, column DEFAULTs, and `ON DELETE CASCADE` on `user_id` shown below are not present in the database. Ranges and defaults are enforced in application code, and deleting a scan cascades to its images and notifications. The notifications index is named `idx_notifications_status_scheduled_at`.
 
 ```sql
 -- users
@@ -226,7 +227,7 @@ CREATE TABLE notifications (
 CREATE INDEX idx_notifications_status_scheduled ON notifications (status, scheduled_at);
 ```
 
-**Deletion policy:** deleting a user cascades to scans, then to images and notifications. Deleting a scan cascades to images and notifications. Migrations should be managed through Flyway, Liquibase, or an equivalent migration tool.
+**Deletion policy:** deleting a scan cascades to images and notifications. User deletion is not exposed by the API. Migrations should be managed through Flyway, Liquibase, or an equivalent migration tool once one is adopted.
 
 ---
 
@@ -243,7 +244,7 @@ CREATE INDEX idx_notifications_status_scheduled ON notifications (status, schedu
 
 ## 7. Future Extensions (Out of Scope for v1)
 
-- **Temperature refinement:** after the frontend temperature input is added, define handling for high-temperature ranges above 25°C and finalize how broadly `temp_celsius` is used.
+- **Temperature refinement:** define handling for high-temperature ranges above 25°C and finalize how broadly `temp_celsius` is used.
 - **Merge `images` into `scans`:** because capture is one-to-one, the image table could be collapsed into `scans`. It remains separate for now because the GCS original/cropped two-step flow is clearer.
 - **Image retention policy:** decide whether original images are retained indefinitely or deleted after N days to reduce GCS cost.
 - **Notification send-time policy:** extract send time, such as 09:00 local time, into a configurable setting.
