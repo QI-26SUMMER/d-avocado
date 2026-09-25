@@ -128,6 +128,5 @@ What we predict is **visual ripening stage**, and we don't market that as "taste
 
 ## References
 
-- Xavier et al. (2024), *Foods* — Hass Avocado Ripening Photographic Dataset, α ripening coefficients
-- Perez et al. (2004) — basis for Q10 value
-- Arpaia et al. (2018) — basis for the temperature–ripening-speed plateau finding
+- Xavier et al. (2024), *Foods* 13(8), 1150 — Hass Avocado Ripening Photographic Dataset, α ripening coefficients. Our Q10 (≈2.29) is derived from re-fitting this dataset's T10/T20 coefficients. [doi.org/10.3390/foods13081150](https://doi.org/10.3390/foods13081150)
+- Arpaia et al. (2018), *Postharvest Biology and Technology* 140, 76–84 — basis for the temperature–ripening-speed plateau finding. [doi.org/10.1016/j.postharvbio.2018.02.015](https://doi.org/10.1016/j.postharvbio.2018.02.015)
