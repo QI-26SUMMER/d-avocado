@@ -6,15 +6,18 @@
 
 ## 1. Evaluation Context
 
-D-avocado has evaluated three model tracks for 5-stage avocado ripeness classification:
+D-avocado has evaluated four model tracks for 5-stage avocado ripeness classification:
 
 | Model Track | Training Setup | Evaluation Setup |
 | --- | --- | --- |
 | ResNet-18 Custom | PyTorch, ImageNet-pretrained | 5-fold cross-validation |
 | AutoML Vision Raw | Vertex AI AutoML Vision | Single 70/15/15 train/validation/test split |
 | AutoML Vision Balanced | Vertex AI AutoML Vision | Single 70/15/15 train/validation/test split |
+| GMM Color Baseline | Color statistics + per-stage GaussianMixture (classical ML) | Single 70/15/15 split (same split as ResNet's fixed-split run) |
 
-The models are not evaluated under the same protocol yet. ResNet-18 uses 5-fold cross-validation, while the AutoML models use a single train/test split. Direct comparison should therefore be treated as directional rather than final.
+The models are not evaluated under the same protocol or data yet. ResNet-18 uses 5-fold cross-validation on a curated subset (392 of 478 samples with a complete stage 1→5 trajectory, 13,192 images), while the AutoML models use a single train/test split with different dataset sizes. Direct comparison should therefore be treated as directional rather than final.
+
+> **Deployment status.** The live AI service currently routes classification to the Vertex AI AutoML Vision endpoint (`MODEL_BACKEND=automl`), because ResNet-18 collapsed to stage 1 on real phone photos (domain gap between light-box training images and phone photos). The production endpoint serves the **AutoML Vision Balanced** model. The ResNet-18 path is kept and can be restored with `MODEL_BACKEND=resnet`.
 
 ---
 
@@ -44,9 +47,10 @@ The models are not evaluated under the same protocol yet. ResNet-18 uses 5-fold 
 
 | Model | Dataset | Evaluation | Main Result | Notes |
 | --- | --- | --- | --- | --- |
-| ResNet-18 Custom | 13,192 images | 5-fold CV | 79.4% exact accuracy, 99.5% within-1-stage accuracy, QWK 0.946 | Strong ordinal behavior; selected deployment checkpoint is fold4/best.pt |
+| ResNet-18 Custom | 13,192 images | 5-fold CV | 79.4% exact accuracy, 99.5% within-1-stage accuracy, QWK 0.946 | Strong ordinal behavior; ResNet-18 deployment candidate is fold4/best.pt |
 | AutoML Vision Raw | 14,570 images | 70/15/15 split | AP 0.904, precision 82.8%, recall 78.4% | Managed baseline with natural class distribution |
-| AutoML Vision Balanced | 20,000 images | 70/15/15 split | AP 0.908, precision 84.3%, recall 79.9% | Balanced to 4,000 images per class; best AutoML aggregate result |
+| AutoML Vision Balanced | 20,000 images | 70/15/15 split | AP 0.908, precision 84.3%, recall 79.9% | Balanced to 4,000 images per class through data augmentation; best AutoML aggregate result; production model |
+| GMM Color Baseline | 13,192 images | 70/15/15 split | 65.0% exact accuracy, 96.4% within-1-stage, QWK 0.889 | Non-deep-learning color floor (12-D "rich" features); rgb-only variant 55.6% |
 
 ---
 
@@ -60,7 +64,8 @@ The models are not evaluated under the same protocol yet. ResNet-18 uses 5-fold 
 | Backbone | ResNet-18 |
 | Pretraining | ImageNet-pretrained |
 | Input size | 224 x 224 |
-| Deployment target | GCP Vertex AI Custom Job |
+| Training | GCP Vertex AI Custom Job |
+| Serving | Cloud Run AI service (`MODEL_BACKEND=resnet`; not the current production backend) |
 
 ### 4.2 Training Configuration
 
@@ -72,20 +77,19 @@ The models are not evaluated under the same protocol yet. ResNet-18 uses 5-fold 
 | Seed | 42 |
 | Epochs | 30 |
 | Batch size | 128 |
-| Learning rate | 0.01 |
-| Early stopping patience | 150 |
+| Learning rate | 0.01 (StepLR, ×0.1 every 10 epochs) |
+| Early stopping patience | 150 validation checks (validation every 10 iterations) |
 
 ### 4.3 Validation Protocol
 
-ResNet-18 uses 5-fold cross-validation.
+ResNet-18 uses 5-fold cross-validation. Folds are split on `(Storage Group, Sample)`, never at image level, so the same avocado never appears in both training and evaluation.
 
 For round `r`:
 
-- Test fold: `fold r`
-- Validation fold: `fold (r + 1) % 5`
-- Training folds: the remaining three folds
+- Held-out fold: `fold r`, used as the validation fold for checkpoint selection (best checkpoint)
+- Training folds: the remaining four folds
 
-The test fold is never used for model selection.
+The reported metrics are the held-out fold's metrics at the selected checkpoint. Because the same fold is used for checkpoint selection, there is no separate test fold, and the CV numbers may be slightly optimistic. The independent single-split run below reports a held-out test result.
 
 ### 4.4 Training-only Data Processing
 
@@ -102,7 +106,7 @@ Class balancing through oversampling is also applied only to the training fold.
 
 ### 4.5 Results
 
-Results are reported as 5-fold mean ± standard deviation over 13,192 images.
+Results are reported as 5-fold mean ± standard deviation of the held-out (validation) fold metrics over 13,192 images.
 
 | Metric | Result |
 | --- | --- |
@@ -112,11 +116,13 @@ Results are reported as 5-fold mean ± standard deviation over 13,192 images.
 | Macro-F1 | 0.790 ± 0.010 |
 | Stage MAE | 0.212 ± 0.010 |
 
+> **Single-split reproduction (held-out test).** An independent fixed-split retrain (`P1_general_resnet18`, 15 epochs, lr 0.01 → 0.001 at epoch 10) reached **test exact accuracy 0.805, within-1 0.996, QWK 0.950, MAE 0.199** on the held-out test set (n = 1,962), with per-class recall `[0.94, 0.81, 0.75, 0.72, 0.79]`.
+
 ### 4.6 Fold Selection
 
 - Fold 2 had the highest exact accuracy: `0.8071`.
 - Fold 4 had the highest QWK: `0.9514`.
-- `fold4/best.pt` was selected as the deployment model.
+- `fold4/best.pt` was selected as the ResNet-18 deployment candidate.
 
 ### 4.7 Confusion Matrix Diagonal
 
@@ -185,7 +191,7 @@ Stage 3 is the weakest class by AP in the raw AutoML model.
 | --- | --- |
 | Framework | GCP Vertex AI AutoML Vision |
 | Training mode | Managed training |
-| Class distribution | Balanced, 4,000 images per class |
+| Class distribution | Balanced to 4,000 images per class through data augmentation |
 
 ### 6.2 Dataset
 

@@ -10,11 +10,11 @@
 | --- | --- |
 | Mobile | iOS app distributed through Xcode/TestFlight/App Store |
 | Backend API | Spring Boot container on Cloud Run |
-| AI inference | FastAPI/Python container on Cloud Run |
+| AI inference | FastAPI/Python container on Cloud Run, calling a Vertex AI AutoML endpoint for classification |
 | Database | Cloud SQL for PostgreSQL |
 | Image storage | Cloud Storage private bucket |
 | Container registry | Artifact Registry |
-| CI/CD | Cloud Build |
+| Container builds | Cloud Build (`gcloud builds submit`, run manually; no CI/CD pipeline yet) |
 | Push delivery | FCM or APNs, final provider pending |
 
 ---
@@ -33,24 +33,25 @@ artifactregistry.googleapis.com
 cloudbuild.googleapis.com
 secretmanager.googleapis.com
 iamcredentials.googleapis.com
+aiplatform.googleapis.com
 ```
 
 Add `firebase.googleapis.com` if FCM is selected for push notifications.
 
 ### 2.2 Resource Names
 
-Suggested baseline names:
+Current deployment:
 
 | Resource | Name |
 | --- | --- |
-| Project ID | `d-avocado` or team-owned equivalent |
-| Region | `asia-northeast3` or selected primary region |
-| Artifact Registry repo | `d-avocado-containers` |
+| Project ID | `qi-2026summer` |
+| Region | `us-central1` |
+| Artifact Registry repo | `avocado` |
 | Backend Cloud Run service | `davocado-backend` |
-| AI Cloud Run service | `davocado-ai-service` |
-| Cloud SQL instance | `davocado-postgres` |
+| AI Cloud Run service | `avocado-serving` |
+| Vertex AI AutoML endpoint | Cross-project endpoint in `qiautoml1` (the AI service account needs `roles/aiplatform.user` there) |
 | Database | `davocado` |
-| GCS bucket | `d-avocado-images` |
+| GCS bucket | `qi-2026summer-avocado-images` |
 
 ---
 
@@ -62,14 +63,19 @@ Store sensitive values in Secret Manager and inject them into Cloud Run.
 
 | Variable | Description |
 | --- | --- |
-| `SPRING_PROFILES_ACTIVE` | Runtime profile, such as `prod` |
-| `DATABASE_URL` | JDBC URL for Cloud SQL PostgreSQL |
-| `DATABASE_USERNAME` | Database user |
-| `DATABASE_PASSWORD` | Database password from Secret Manager |
-| `JWT_SECRET` | JWT signing secret from Secret Manager |
-| `GCS_BUCKET_NAME` | Image bucket name, such as `d-avocado-images` |
-| `AI_SERVICE_URL` | Internal HTTPS URL of the AI Cloud Run service |
-| `GOOGLE_CLOUD_PROJECT` | GCP project ID |
+| `SPRING_PROFILES_ACTIVE` | Runtime profile: `cloud` on Cloud Run (`local` for development) |
+| `DB_URL` | JDBC URL for Cloud SQL PostgreSQL |
+| `DB_USERNAME` | Database user |
+| `DB_PASSWORD` | Database password from Secret Manager |
+| `JWT_SECRET` | JWT signing secret from Secret Manager (at least 32 bytes) |
+| `JWT_ACCESS_TTL` | Access token lifetime in seconds (default `1209600`, 14 days) |
+| `GCS_BUCKET` | Image bucket name, `qi-2026summer-avocado-images`. Blank disables image storage |
+| `GCS_SIGNED_URL_TTL_MINUTES` | Signed URL lifetime (default `15`) |
+| `AI_BASE_URL` | HTTPS URL of the AI Cloud Run service. Blank disables scanning (502) |
+| `AI_PREDICT_PATH` | Prediction path (default `/predict`) |
+| `AI_CONNECT_TIMEOUT_SECONDS` / `AI_READ_TIMEOUT_SECONDS` | AI call timeouts (default `10` / `60`) |
+| `AI_USE_ID_TOKEN` | Attach a Google-signed ID token to AI calls (default `true`) |
+| `AI_AUDIENCE` | ID token audience (defaults to `AI_BASE_URL`) |
 | `PUSH_PROVIDER` | `fcm` or `apns`, pending final decision |
 | `FCM_CREDENTIALS` | FCM credentials or Secret Manager reference, if FCM is used |
 
@@ -77,11 +83,15 @@ Store sensitive values in Secret Manager and inject them into Cloud Run.
 
 | Variable | Description |
 | --- | --- |
-| `MODEL_VERSION` | Model version string, such as `resnet18_v3` |
-| `MODEL_PATH` | Local container path or GCS path for model weights |
-| `DEFAULT_TEMP_CELSIUS` | Default room temperature when the client does not provide one |
-| `VALID_TEMP_MIN_CELSIUS` | Lower valid model range, currently around `10` |
-| `VALID_TEMP_MAX_CELSIUS` | Upper valid model range, currently around `25` |
+| `MODEL_BACKEND` | Classifier backend: `automl` (current production) or `resnet` (default in code) |
+| `AUTOML_PROJECT` / `AUTOML_LOCATION` / `AUTOML_ENDPOINT_ID` | Vertex AI AutoML endpoint (`qiautoml1`, `us-central1`) |
+| `AIP_STORAGE_URI` | GCS path of the ResNet-18 checkpoint (used when `MODEL_BACKEND=resnet`) |
+| `ENABLE_CROP` | `1` enables background removal and crop before classification (enabled in production) |
+| `SEGMENTER` | `inspyrenet` (default), `rembg` (faster fallback), or `sam3` (GPU only) |
+| `INSPYRENET_MODE` | `base` (default, higher quality) or `fast` |
+| `AIP_HTTP_PORT` / `AIP_HEALTH_ROUTE` / `AIP_PREDICT_ROUTE` | Port and routes (defaults `8080`, `/health`, `/predict`) |
+
+The default room temperature (20 °C) and the accepted temperature range (clamped to 10–25 °C) are fixed in code.
 
 ---
 
@@ -91,7 +101,7 @@ Store sensitive values in Secret Manager and inject them into Cloud Run.
 2. Create the `davocado` database.
 3. Create a least-privilege application user.
 4. Configure Cloud Run database connectivity through the Cloud SQL connector or private networking.
-5. Run schema migrations using Flyway, Liquibase, or the backend migration tool.
+5. Create the schema. No migration tool is used yet: the schema was generated by Hibernate from the JPA entities, and the `cloud` profile runs with `ddl-auto: none`.
 
 The v1.0 schema is defined in [Database.md](Database.md).
 
@@ -120,7 +130,7 @@ cropped/{user_id}/{scan_id}.jpg
 Build the Spring Boot application into a container image and push it to Artifact Registry.
 
 ```text
-artifact-registry/d-avocado-containers/davocado-backend:{version}
+us-central1-docker.pkg.dev/qi-2026summer/avocado/davocado-backend:{version}
 ```
 
 ### 6.2 Deploy to Cloud Run
@@ -134,11 +144,8 @@ Deploy with:
 
 ### 6.3 Backend Health Checks
 
-Recommended endpoints:
-
 ```text
-GET /actuator/health
-GET /actuator/info
+GET /health   →  { "status": "ok" }
 ```
 
 The health endpoint should verify application readiness without performing expensive AI calls.
@@ -159,7 +166,7 @@ Build the Python/FastAPI inference service with:
 Push the image to Artifact Registry:
 
 ```text
-artifact-registry/d-avocado-containers/davocado-ai-service:{version}
+us-central1-docker.pkg.dev/qi-2026summer/avocado/avocado-serving:{version}
 ```
 
 ### 7.2 Deploy to Cloud Run
@@ -168,9 +175,10 @@ Deploy with:
 
 - Authentication required.
 - Invocation allowed only from the backend service account.
-- CPU and memory sized for image preprocessing and ResNet-18 inference.
-- Timeout long enough for cold starts and first inference.
-- Concurrency tuned conservatively if model memory usage is high.
+- `--memory=8Gi --cpu=4` (InSPyReNet runs out of memory at the 4Gi default).
+- `--concurrency=1 --min-instances=10 --max-instances=10`, so each request gets its own warm instance (a warm prediction takes about 50–65 s; a cold start takes 2.5–3 minutes).
+- Timeout long enough for background removal and the AutoML call.
+- These flags are deploy-time settings only and are not stored in any config file.
 
 ### 7.3 AI Health Checks
 
@@ -178,10 +186,9 @@ Recommended endpoints:
 
 ```text
 GET /health
-GET /model/version
 ```
 
-`/health` should confirm the service is alive. `/model/version` should return the active `MODEL_VERSION`.
+`/health` confirms the service is alive and reports the active model (the ResNet-18 experiment id or the AutoML endpoint).
 
 ---
 
@@ -206,7 +213,7 @@ For v1.0, Cloud Scheduler calling a protected backend endpoint is the recommende
 
 ## 9. CI/CD Flow
 
-Recommended Cloud Build pipeline:
+Not set up yet: builds and deploys are currently run manually (`gcloud builds submit`, then `gcloud run deploy`). Recommended Cloud Build pipeline:
 
 ```text
 Push to main

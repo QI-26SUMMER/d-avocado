@@ -24,10 +24,10 @@ Google Cloud Platform provides the managed infrastructure: Cloud Run for compute
 
 The iOS app is the only client in the initial build.
 
-- Built with SwiftUI and MVVM.
+- Built with SwiftUI; app state is a single `@Observable` `AppState` shared through the SwiftUI environment.
 - Sends authenticated API requests with a JWT access token.
 - Uploads one avocado image per scan.
-- Displays the result card: predicted stage, D-day text, and analyzed image.
+- Displays the result card: predicted stage and D-day text.
 - Provides Settings for `preferred_stage`, `push_enabled`, and `advance_notice_days`.
 - Shows scan History and an in-app notification inbox.
 - Registers the FCM/APNs push token automatically after notification permission is granted.
@@ -36,7 +36,7 @@ The iOS app is the only client in the initial build.
 
 The backend is the central orchestration layer.
 
-- Exposes REST API endpoints under `/v1`.
+- Exposes REST API endpoints at the service root (no `/v1` prefix); successful responses are wrapped as `{ "data": ... }`.
 - Owns users, settings, scan history, image metadata, and notifications.
 - Stores original and cropped image paths in the database.
 - Uploads image objects to Cloud Storage.
@@ -48,12 +48,12 @@ The backend is the central orchestration layer.
 
 The AI service owns all model-related work.
 
-- Receives an image plus `{ target_stage, temp_celsius? }`.
-- Performs preprocessing and avocado/background segmentation.
-- Runs the deployed Vertex AI AutoML model for ripeness classification.
-- ResNet-18 was also developed and evaluated during the model development process.
-- Returns `predicted_stage`, `stage_probs`, `days_to_target`, `estimated_peak_date`, and `model_version`.
-- Produces a cropped image for storage and optional UI/debug use.
+- Receives a base64 image plus `{ target_stage, temp_celsius? }` in the Vertex AI prediction format (`instances` / `parameters`).
+- Removes the background and crops the most prominent object (InSPyReNet salient-object segmentation).
+- Runs the deployed Vertex AI AutoML model for ripeness classification (cross-project endpoint in `qiautoml1`).
+- ResNet-18 was also developed and evaluated during the model development process, and can be switched back in with `MODEL_BACKEND=resnet`.
+- Returns `predicted_stage`, `label`, `hint`, `confidence`, `stage_probs`, `days_to_target`, `model_version`, and the cropped image (`cropped_b64`). `estimated_peak_date` is calculated by the backend.
+- A per-image error is returned as `{ "error": ... }`, which the backend maps to 422 `NO_AVOCADO_DETECTED`.
 
 The current production inference uses Vertex AI AutoML.
 
@@ -70,16 +70,18 @@ iOS App
   ▼  
 Spring Boot API  
   │  
-  ├─ Store original image in Cloud Storage  
-  │  
   ├─ Read users.preferred_stage  
   │  
   ├─ Call AI Service on Cloud Run  
   │    image + target_stage + optional temp_celsius  
   │  
-  ├─ Store cropped image in Cloud Storage  
+  ├─ Calculate estimated_peak_date = today (UTC) + round(days_to_target)  
   │  
-  ├─ Insert scans + images rows in Cloud SQL  
+  ├─ Insert scans row in Cloud SQL  
+  │  
+  ├─ Store original and cropped images in Cloud Storage  
+  │  
+  ├─ Insert images row in Cloud SQL  
   │  
   ├─ Schedule notification if enabled  
   │  
@@ -105,7 +107,7 @@ Spring Boot API
 
 Scan created  
   │  
-  ├─ estimated_peak_date returned by AI service  
+  ├─ estimated_peak_date calculated by the backend from days_to_target  
   ├─ scheduled_at = estimated_peak_date - advance_notice_days  
   └─ notifications row inserted  
        │  
@@ -135,7 +137,7 @@ See [Database.md](https://github.com/QI-26SUMMER/d-avocado/blob/main/docs/Databa
 
 Cloud Storage stores private image objects.
 
-gs://d-avocado-images/
+gs://qi-2026summer-avocado-images/
 ├── raw/{user_id}/{scan_id}.jpg
 └── cropped/{user_id}/{scan_id}.jpg
 

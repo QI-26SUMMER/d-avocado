@@ -37,20 +37,23 @@ Users can photograph an avocado, receive an AI-based ripeness prediction, estima
 ```text
 d-avocado/
 │
-├── docs/
-│   ├── PRD.md
-│   ├── Architecture.md
-│   ├── API.md
-│   ├── Deployment.md
-│   ├── Database.md
-│   └── AI.md
-│
-├── davocado-frontend
-├── davocado-backend
-└── d-avocado-ripeness-mlops
+└── docs/
+    ├── PRD.md
+    ├── Architecture.md
+    ├── API.md
+    ├── Deployment.md
+    ├── Database.md
+    ├── AI.md
+    └── images/
 ```
 
-The three service directories represent the planned code modules for the iOS app, backend API, and AI/MLOps service. They can later be managed as separate repositories, Git submodules, or copied source folders depending on the team's repository strategy.
+This repository holds the project documentation. The source code lives in three separate repositories:
+
+| Repository | Description |
+|------------|-------------|
+| [davocado-frontend](https://github.com/QI-26SUMMER/davocado-frontend) | iOS app (Swift, SwiftUI) |
+| [davocado-backend](https://github.com/QI-26SUMMER/davocado-backend) | Backend API (Spring Boot) |
+| [d-avocado-ripeness-mlops](https://github.com/QI-26SUMMER/d-avocado-ripeness-mlops) | Model training, evaluation, and AI inference service (FastAPI) |
 
 ---
 
@@ -58,8 +61,8 @@ The three service directories represent the planned code modules for the iOS app
 
 ### Mobile
 
-- SwiftUI
-- MVVM
+- Swift, SwiftUI (iOS 18+)
+- Observation framework (`@Observable` app state)
 
 ### Backend
 
@@ -70,11 +73,10 @@ The three service directories represent the planned code modules for the iOS app
 
 ### AI / Machine Learning
 
-- Python
-- PyTorch
-- ResNet-18
-- OpenCV
-- Segment Anything Model (SAM)
+- Python, FastAPI (inference service on Cloud Run)
+- Google Vertex AI AutoML Vision (production classifier)
+- PyTorch, ResNet-18 (in-house model, trained and evaluated with 5-fold cross-validation)
+- InSPyReNet (background removal before classification)
 
 ### Cloud
 
@@ -84,31 +86,26 @@ The three service directories represent the planned code modules for the iOS app
 - Cloud Storage
 - Artifact Registry
 - Cloud Build
+- Vertex AI (AutoML endpoint, Custom Job training)
 
 ---
 
 ## 🚀 End-to-End Workflow
 
 ```text
-Take Photo
+Take Photo (iOS)
       │
       ▼
-Upload Image
+Upload Image → Backend API (Spring Boot)
       │
       ▼
-Backend API
+AI Inference Service (FastAPI, Cloud Run)
+  ├─ Background removal & crop (InSPyReNet)
+  ├─ Ripeness classification (Vertex AI AutoML)
+  └─ Temperature-adjusted D-day calculation
       │
       ▼
-Inference Preprocessing
-      │
-      ▼
-AI Inference Service
-      │
-      ▼
-Ripeness Prediction
-      │
-      ▼
-Save Scan History
+Backend: save scan · upload images to GCS · schedule notification
       │
       ▼
 Return D-Day Result

@@ -18,8 +18,8 @@ user **how many days remain until their target eating stage (D-day)**.
 (Note: QWK was initially chosen as the primary metric to penalize ordinal
 misclassification proportionally to distance, but was dropped in favor of accuracy
 because QWK scores came out unrealistically high and were not discriminating enough.)
-- Reducing confusion between the Breaking and Overripe stages specifically, tracked as a
-separate goal (confirmed in the literature as the hardest pair to distinguish)
+- Reducing confusion between the middle stages specifically, tracked as a separate goal
+(in our evaluations the weakest classes are Stage 4 for ResNet-18 and Stage 3 for AutoML)
 - A working iOS app: photo capture → result (stage + D-day) displayed
 - Notifications fire and display correctly when the target stage is approaching
 
@@ -51,8 +51,8 @@ remaining until the user's target stage (`preferred_stage`, 1–5). The target i
 per user (not per fruit) and applies automatically to every subsequent scan.
 2. **We account for storage temperature.**
 The same ripeness stage can mean different remaining time depending on storage
-temperature. We use the Q10 coefficient to interpolate across temperature ranges and
-adjust the β coefficient accordingly. The valid range is approximately 10–25°C;
+temperature. We re-fit the dataset's ripening coefficient (α, days per stage) at 10°C and
+20°C and interpolate it log-linearly between them (equivalent Q10 ≈ 2.29). The valid range is approximately 10–25°C;
 anything outside that range is explicitly out of scope for now (see Out of Scope below).
 3. **We notify before the window closes.**
 As the target stage approaches, we send a notification in advance by the number of days
@@ -105,7 +105,7 @@ it every time.
 - Per-fruit registration/tracking — simplified so that one photo = one scan record
 - Refrigerated-storage ripening prediction (≤10°C) — excluded entirely since chilling
 injury makes prediction meaningless; room temperature only for now
-- β interpolation above 25°C — outside the valid Q10 interpolation range (e.g. un-air-
+- α interpolation above 25°C — outside the valid Q10 interpolation range (e.g. un-air-
 conditioned indoor environments in hot climates are a future consideration)
 - Expansion to fruits other than avocado
 
@@ -120,8 +120,8 @@ What we predict is **visual ripening stage**, and we don't market that as "taste
 
 | Risk | Mitigation |
 | --- | --- |
-| Training images are shot on white backgrounds under studio lighting → performance may degrade on real photos with arbitrary backgrounds (domain gap) | Inference-time preprocessing: background segmentation via **rembg**. (SAM3 was considered but a lighter-weight model was used instead due to GPU constraints.) |
-| Breaking and Overripe stages are visually easy to confuse | QWK is tracked as a secondary metric, giving lower penalty to misclassifications that are close in ordinal distance |
+| Training images are shot on white backgrounds under studio lighting → performance may degrade on real photos with arbitrary backgrounds (domain gap) | Inference-time preprocessing: background removal via **InSPyReNet** (rembg/U²-Net kept as a faster fallback). (SAM3 was considered but a lighter-weight model was used instead due to GPU constraints.) |
+| Adjacent middle stages (2↔3, 3↔4) are visually easy to confuse | QWK and within-1-stage accuracy are tracked as secondary metrics, giving lower penalty to misclassifications that are close in ordinal distance |
 | GPU training environment is currently CPU-only due to GCP free-trial quota limits | Plan to move to a GPU-backed Vertex AI Custom Job after upgrading; training-time delays are factored into the schedule |
 
 ---
